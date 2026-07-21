@@ -1,0 +1,12 @@
+services:
+  tiktok-bot:
+    build: .
+    container_name: tiktok-bot
+    restart: unless-stopped
+    environment:
+      - BOT_TOKEN=${BOT_TOKEN}
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
