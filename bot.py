@@ -16,6 +16,9 @@ from aiogram.types import (
     InlineQueryResultVideo,
     InlineQueryResultPhoto,
 )
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 
@@ -87,6 +90,27 @@ async def fetch_tikwm(url: str) -> dict | None:
             return data.get("data")
 
 
+def build_caption_with_quote(title: str):
+    """
+    Оборачивает описание в сворачиваемую цитату (expandable blockquote).
+    Возвращает (caption, caption_entities) или (None, None), если описания нет.
+    """
+    title = (title or "").strip()
+    if not title:
+        return None, None
+    if len(title) > 1024:
+        title = title[:1021] + "..."
+    length = len(title.encode("utf-16-le")) // 2
+    entities = [
+        MessageEntity(
+            type="expandable_blockquote",
+            offset=0,
+            length=length,
+        )
+    ]
+    return title, entities
+
+
 @dp.message(F.text.regexp(TIKTOK_URL_RE))
 async def tiktok_handler(message: Message):
     match = TIKTOK_URL_RE.search(message.text)
@@ -115,17 +139,17 @@ async def tiktok_handler(message: Message):
         await status_msg.edit_text(err_text, entities=err_entities)
         return
 
-    done_text, done_entities = build_message([EMOJI_CHECK, " Скачано!"])
+    # Подпись — оригинальное описание видео из TikTok, свёрнутое в цитату
+    caption, caption_entities = build_caption_with_quote(data.get("title"))
 
     try:
         # Фото-слайдшоу (TikTok photo mode)
         if data.get("images"):
             media = [InputMediaPhoto(media=URLInputFile(img)) for img in data["images"][:10]]
-            # caption с entities можно поставить только на первый элемент группы
             media[0] = InputMediaPhoto(
                 media=media[0].media,
-                caption=done_text,
-                caption_entities=done_entities,
+                caption=caption,
+                caption_entities=caption_entities,
             )
             await message.answer_media_group(media)
         else:
@@ -138,9 +162,24 @@ async def tiktok_handler(message: Message):
                 return
             await message.answer_video(
                 URLInputFile(video_url),
-                caption=done_text,
-                caption_entities=done_entities,
+                caption=caption,
+                caption_entities=caption_entities,
             )
+
+        # Музыка отдельным файлом сразу после видео/фото
+        music_url = (data.get("music_info") or {}).get("play") or data.get("music")
+        if music_url:
+            music_title = (data.get("music_info") or {}).get("title") or "Звук из TikTok"
+            try:
+                await message.answer_audio(
+                    URLInputFile(music_url, filename=f"{music_title}.mp3"),
+                    title=music_title,
+                    performer=(data.get("music_info") or {}).get("author") or None,
+                )
+            except Exception:
+                logging.exception("failed to send music")
+                # Не критично — просто пропускаем отправку музыки, если не вышло
+
     except Exception:
         logging.exception("failed to send media")
         err_text, err_entities = build_message(
@@ -175,19 +214,19 @@ async def inline_tiktok_handler(inline_query: InlineQuery):
 
     result_id = str(uuid.uuid4())
     thumb_url = data.get("cover") or data.get("origin_cover") or ""
+    caption, caption_entities = build_caption_with_quote(data.get("title"))
 
     results = []
 
     if data.get("images"):
-        # Фото-слайдшоу: инлайн поддерживает только одиночные результаты,
-        # поэтому отдаём первое фото
         first_image = data["images"][0]
         results.append(
             InlineQueryResultPhoto(
                 id=result_id,
                 photo_url=first_image,
                 thumbnail_url=thumb_url or first_image,
-                caption="✅ Скачано!",
+                caption=caption,
+                caption_entities=caption_entities,
             )
         )
     else:
@@ -200,7 +239,8 @@ async def inline_tiktok_handler(inline_query: InlineQuery):
                     mime_type="video/mp4",
                     thumbnail_url=thumb_url,
                     title=data.get("title") or "TikTok видео",
-                    caption="✅ Скачано!",
+                    caption=caption,
+                    caption_entities=caption_entities,
                 )
             )
 
